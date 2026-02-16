@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import dataclasses
+import logging
 from typing import Any
 
 from .gicisky_ble import GiciskyBluetoothDeviceData as GiciskyDeviceData
@@ -40,6 +41,13 @@ from .const import (
     DEFAULT_RETRY_COUNT,
     DEFAULT_WRITE_DELAY_MS,
 )
+from .badge_eink_ble.const import (
+    BADGE_EINK_WRITE_CHAR,
+    BADGE_EINK_NOTIFY_CHAR,
+    BADGE_EINK_NAME_PATTERNS,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 OPTIONS_SCHEMA = {
@@ -82,21 +90,51 @@ def _get_device_data(device_type: str) -> GiciskyDeviceData | BadgeEinkDeviceDat
 
 def _detect_device_type(service_info: BluetoothServiceInfoBleak) -> str:
     """Detect device type from BLE service info."""
-    # Check for badge_eink characteristics
-    try:
-        for svc in (service_info.device.services or []):
-            for char in (svc.characteristics or []):
-                if char.uuid in [
-                    "00001525-1212-efde-1523-785feabcd123",
-                    "00001526-1212-efde-1523-785feabcd123",
-                ]:
-                    return DEVICE_TYPE_BADGE_EINK
-    except Exception:
-        pass
+    address = service_info.address
     
-    # Check for gicisky manufacturer ID
+    # Strategy 1: Check for badge_eink characteristics
+    try:
+        if service_info.device.services:
+            for svc in service_info.device.services:
+                if svc.characteristics:
+                    for char in svc.characteristics:
+                        if char.uuid.lower() in [
+                            BADGE_EINK_WRITE_CHAR.lower(),
+                            BADGE_EINK_NOTIFY_CHAR.lower(),
+                        ]:
+                            _LOGGER.info(
+                                "Device %s detected as badge_eink (characteristic %s)",
+                                address,
+                                char.uuid
+                            )
+                            return DEVICE_TYPE_BADGE_EINK
+    except Exception as e:
+        _LOGGER.debug("Error detecting badge_eink characteristics for %s: %s", address, e)
+    
+    # Strategy 2: Check device name for badge_eink patterns
+    name = (service_info.name or "").lower()
+    for pattern in BADGE_EINK_NAME_PATTERNS:
+        if pattern.lower() in name:
+            _LOGGER.info(
+                "Device %s detected as badge_eink (name pattern '%s')",
+                address,
+                pattern
+            )
+            return DEVICE_TYPE_BADGE_EINK
+    
+    # Strategy 3: Check for gicisky manufacturer ID
     if 0x5053 in service_info.manufacturer_data:
+        _LOGGER.info("Device %s detected as gicisky (manufacturer 0x5053)", address)
         return DEVICE_TYPE_GICISKY
+    
+    # Log info for debugging
+    _LOGGER.debug(
+        "Device %s - couldn't auto-detect type. Name: %s, Manufacturer: %s, Service UUIDs: %s",
+        address,
+        service_info.name,
+        {k: v.hex() if isinstance(v, bytes) else v for k, v in service_info.manufacturer_data.items()},
+        service_info.service_uuids
+    )
     
     return DEFAULT_DEVICE_TYPE
 
@@ -157,7 +195,13 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle the user step to pick discovered device."""
         if user_input is not None:
+            # Check if user selected to specify device type manually
             address = user_input[CONF_ADDRESS]
+            
+            # Check if this is a manual configuration
+            if address.startswith("manual_"):
+                return await self.async_step_manual_config()
+            
             await self.async_set_unique_id(address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
             discovery = self._discovered_devices[address]
@@ -188,17 +232,80 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
                     device=device,
                 )
 
-        if not self._discovered_devices:
-            return self.async_abort(reason="no_devices_found")
-
         titles = {
             address: discovery.title
             for (address, discovery) in self._discovered_devices.items()
         }
+        
+        # Add option for manual configuration
+        titles["manual_config"] = "Configurer manuellement (easyTag non détecté)"
+        
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({vol.Required(CONF_ADDRESS): vol.In(titles)}),
         )
+
+    async def async_step_manual_config(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle manual configuration when auto-detection fails."""
+        if user_input is not None:
+            address = user_input.get("mac_address", "").upper()
+            device_type = user_input.get("device_type", DEFAULT_DEVICE_TYPE)
+            
+            # Validate MAC address format
+            if not self._is_valid_mac(address):
+                return self.async_show_form(
+                    step_id="manual_config",
+                    data_schema=vol.Schema({
+                        vol.Required("mac_address"): str,
+                        vol.Required("device_type"): vol.In([
+                            DEVICE_TYPE_GICISKY,
+                            DEVICE_TYPE_BADGE_EINK,
+                        ]),
+                    }),
+                    errors={"mac_address": "invalid_mac"},
+                )
+            
+            await self.async_set_unique_id(address, raise_on_progress=False)
+            self._abort_if_unique_id_configured()
+            
+            # Create device based on selected type
+            device = _get_device_data(device_type)
+            self._device_type = device_type
+            self._discovered_device = device
+            
+            # For manual config, create a minimal service info
+            identifier = address.replace(":", "")[-8:]
+            self.context["title_placeholders"] = {"name": f"{device_type} {identifier}"}
+            
+            return self._async_get_or_create_entry()
+        
+        return self.async_show_form(
+            step_id="manual_config",
+            data_schema=vol.Schema({
+                vol.Required("mac_address", description={"suggested_value": "44:00:00:49:61:56"}): str,
+                vol.Required("device_type", default=DEVICE_TYPE_BADGE_EINK): vol.In([
+                    DEVICE_TYPE_GICISKY,
+                    DEVICE_TYPE_BADGE_EINK,
+                ]),
+            }),
+        )
+
+    @staticmethod
+    def _is_valid_mac(address: str) -> bool:
+        """Validate MAC address format."""
+        if not address:
+            return False
+        parts = address.split(":")
+        if len(parts) != 6:
+            return False
+        try:
+            for part in parts:
+                int(part, 16)
+            return True
+        except ValueError:
+            return False
 
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
