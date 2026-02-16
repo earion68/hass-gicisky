@@ -54,9 +54,10 @@ from propcache.api import cached_property
 from .coordinator import GiciskyPassiveBluetoothDataProcessor
 from .device import device_key_to_bluetooth_entity_key
 from .types import GiciskyConfigEntry
-from .const import DOMAIN
+from .const import DOMAIN, DEVICE_TYPE_GICISKY, DEVICE_TYPE_BADGE_EINK
 
 _LOGGER = logging.getLogger(__name__)
+
 
 SENSOR_DESCRIPTIONS = {
     # Acceleration (m/s²)
@@ -499,10 +500,21 @@ class GiciskyDurationSensorEntity(
         """Initialize the duration sensor."""
         CoordinatorEntity.__init__(self, coordinator)
         address = hass.data[DOMAIN][entry.entry_id]["address"]
+        device_type = hass.data[DOMAIN][entry.entry_id].get("device_type", DEVICE_TYPE_GICISKY)
         self._address = address
+        self._device_type = device_type
         self._identifier = address.replace(":", "")[-8:]
-        self._attr_name = f"Gicisky {self._identifier} Write Duration"
-        self._attr_unique_id = f"gicisky_{self._identifier}_write_duration"
+        
+        # Use appropriate device names based on device type
+        if device_type == DEVICE_TYPE_BADGE_EINK:
+            device_name = "Badge e-ink"
+            self._manufacturer = "Badge e-ink"
+        else:
+            device_name = "Gicisky"
+            self._manufacturer = "Gicisky"
+            
+        self._attr_name = f"{device_name} {self._identifier} Write Duration"
+        self._attr_unique_id = f"{device_type}_{self._identifier}_write_duration"
         self._native_value: float = 0.0
 
     @property
@@ -515,8 +527,8 @@ class GiciskyDurationSensorEntity(
         """Return device info."""
         return DeviceInfo(
             connections={(CONNECTION_BLUETOOTH, self._address)},
-            name=f"Gicisky {self._identifier}",
-            manufacturer="Gicisky",
+            name=f"{self._manufacturer} {self._identifier}",
+            manufacturer=self._manufacturer,
         )
 
     @cached_property

@@ -6,7 +6,8 @@ from collections.abc import Mapping
 import dataclasses
 from typing import Any
 
-from .gicisky_ble import GiciskyBluetoothDeviceData as DeviceData
+from .gicisky_ble import GiciskyBluetoothDeviceData as GiciskyDeviceData
+from .badge_eink_ble import BadgeEinkBluetoothDeviceData as BadgeEinkDeviceData
 import voluptuous as vol
 
 from homeassistant.components import onboarding
@@ -30,6 +31,10 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     DOMAIN,
+    DEVICE_TYPE_GICISKY,
+    DEVICE_TYPE_BADGE_EINK,
+    DEFAULT_DEVICE_TYPE,
+    CONF_DEVICE_TYPE,
     CONF_RETRY_COUNT,
     CONF_WRITE_DELAY_MS,
     DEFAULT_RETRY_COUNT,
@@ -64,10 +69,39 @@ class Discovery:
 
     title: str
     discovery_info: BluetoothServiceInfoBleak
-    device: DeviceData
+    device_type: str
+    device: GiciskyDeviceData | BadgeEinkDeviceData
 
 
-def _title(discovery_info: BluetoothServiceInfoBleak, device: DeviceData) -> str:
+def _get_device_data(device_type: str) -> GiciskyDeviceData | BadgeEinkDeviceData:
+    """Get appropriate device data instance based on type."""
+    if device_type == DEVICE_TYPE_BADGE_EINK:
+        return BadgeEinkDeviceData()
+    return GiciskyDeviceData()
+
+
+def _detect_device_type(service_info: BluetoothServiceInfoBleak) -> str:
+    """Detect device type from BLE service info."""
+    # Check for badge_eink characteristics
+    try:
+        for svc in (service_info.device.services or []):
+            for char in (svc.characteristics or []):
+                if char.uuid in [
+                    "00001525-1212-efde-1523-785feabcd123",
+                    "00001526-1212-efde-1523-785feabcd123",
+                ]:
+                    return DEVICE_TYPE_BADGE_EINK
+    except Exception:
+        pass
+    
+    # Check for gicisky manufacturer ID
+    if 0x5053 in service_info.manufacturer_data:
+        return DEVICE_TYPE_GICISKY
+    
+    return DEFAULT_DEVICE_TYPE
+
+
+def _title(discovery_info: BluetoothServiceInfoBleak, device: GiciskyDeviceData | BadgeEinkDeviceData) -> str:
     return device.title or device.get_device_name() or discovery_info.name
 
 
@@ -79,7 +113,8 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._discovery_info: BluetoothServiceInfoBleak | None = None
-        self._discovered_device: DeviceData | None = None
+        self._discovered_device: GiciskyDeviceData | BadgeEinkDeviceData | None = None
+        self._device_type: str = DEFAULT_DEVICE_TYPE
         self._discovered_devices: dict[str, Discovery] = {}
 
     async def async_step_bluetooth(
@@ -88,7 +123,10 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle the bluetooth discovery step."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
-        device = DeviceData()
+        
+        # Detect device type
+        device_type = _detect_device_type(discovery_info)
+        device = _get_device_data(device_type)
 
         if not device.supported(discovery_info):
             return self.async_abort(reason="not_supported")
@@ -97,6 +135,7 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = {"name": title}
         self._discovery_info = discovery_info
         self._discovered_device = device
+        self._device_type = device_type
 
         return await self.async_step_bluetooth_confirm()
 
@@ -127,6 +166,7 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
 
             self._discovery_info = discovery.discovery_info
             self._discovered_device = discovery.device
+            self._device_type = discovery.device_type
 
             return self._async_get_or_create_entry()
 
@@ -135,11 +175,16 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
             address = discovery_info.address
             if address in current_addresses or address in self._discovered_devices:
                 continue
-            device = DeviceData()
+            
+            # Detect device type
+            device_type = _detect_device_type(discovery_info)
+            device = _get_device_data(device_type)
+            
             if device.supported(discovery_info):
                 self._discovered_devices[address] = Discovery(
                     title=_title(discovery_info, device),
                     discovery_info=discovery_info,
+                    device_type=device_type,
                     device=device,
                 )
 
@@ -159,8 +204,10 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
         """Handle a flow initialized by a reauth event."""
-        device: DeviceData = entry_data["device"]
+        device_type = entry_data.get(CONF_DEVICE_TYPE, DEFAULT_DEVICE_TYPE)
+        device = _get_device_data(device_type)
         self._discovered_device = device
+        self._device_type = device_type
 
         self._discovery_info = device.last_service_info
 
@@ -175,7 +222,9 @@ class GiciskyConfigFlow(ConfigFlow, domain=DOMAIN):
     def _async_get_or_create_entry(
         self, bindkey: str | None = None
     ) -> ConfigFlowResult:
-        data: dict[str, Any] = {}
+        data: dict[str, Any] = {
+            CONF_DEVICE_TYPE: self._device_type,
+        }
         if bindkey:
             data["bindkey"] = bindkey
 

@@ -11,7 +11,9 @@ from io import BytesIO
 
 from .imagegen import *
 from .gicisky_ble import GiciskyBluetoothDeviceData, SensorUpdate
-from .gicisky_ble.writer import update_image
+from .badge_eink_ble import BadgeEinkBluetoothDeviceData
+from .gicisky_ble.writer import update_image as gicisky_update_image
+from .badge_eink_ble.writer import update_image as badge_eink_update_image
 from homeassistant.components.bluetooth import (
     DOMAIN as BLUETOOTH_DOMAIN,
     BluetoothScanningMode,
@@ -29,6 +31,9 @@ from homeassistant.exceptions import HomeAssistantError
 from .const import (
     DOMAIN,
     LOCK,
+    DEVICE_TYPE_GICISKY,
+    DEVICE_TYPE_BADGE_EINK,
+    CONF_DEVICE_TYPE,
     CONF_RETRY_COUNT,
     CONF_WRITE_DELAY_MS,
     DEFAULT_RETRY_COUNT,
@@ -71,10 +76,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: GiciskyConfigEntry) -> b
     address = entry.unique_id
     assert address is not None
 
-    data = GiciskyBluetoothDeviceData()
+    # Determine device type
+    device_type = entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_GICISKY)
+    
+    # Create appropriate device data based on type
+    if device_type == DEVICE_TYPE_BADGE_EINK:
+        data = BadgeEinkBluetoothDeviceData()
+    else:
+        data = GiciskyBluetoothDeviceData()
+    
     hass.data[DOMAIN][entry.entry_id] = {}
     hass.data[DOMAIN][entry.entry_id]['address'] = address
     hass.data[DOMAIN][entry.entry_id]['data'] = data
+    hass.data[DOMAIN][entry.entry_id]['device_type'] = device_type
 
     if LOCK not in hass.data[DOMAIN]:
         hass.data[DOMAIN][LOCK] = Lock()
@@ -151,6 +165,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: GiciskyConfigEntry) -> b
                 write_delay_ms = int(options.get(CONF_WRITE_DELAY_MS, DEFAULT_WRITE_DELAY_MS))
                 address = hass.data[DOMAIN][entry_id]['address']
                 data = hass.data[DOMAIN][entry_id]['data']
+                device_type = hass.data[DOMAIN][entry_id].get('device_type', DEVICE_TYPE_GICISKY)
                 image_coordinator = hass.data[DOMAIN][entry_id]['image_coordinator']
                 preview_coordinator = hass.data[DOMAIN][entry_id]['preview_coordinator']
                 connectivity_coordinator = hass.data[DOMAIN][entry_id]['connectivity_coordinator']
@@ -177,7 +192,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: GiciskyConfigEntry) -> b
                 
                 try:
                     for attempt in range(1, max_retries + 1):
-                        success = await update_image(ble_device, data.device, image, threshold, red_threshold, attempt=attempt, write_delay_ms=write_delay_ms)
+                        # Call appropriate update function based on device type
+                        if device_type == DEVICE_TYPE_BADGE_EINK:
+                            success = await badge_eink_update_image(
+                                ble_device,
+                                image_bytes.getvalue(),
+                                width=800,
+                                height=480,
+                            )
+                        else:
+                            success = await gicisky_update_image(
+                                ble_device, 
+                                data.device, 
+                                image, 
+                                threshold, 
+                                red_threshold, 
+                                attempt=attempt, 
+                                write_delay_ms=write_delay_ms
+                            )
+                        
                         if success:
                             image_coordinator.async_set_updated_data(image_bytes.getvalue())
                             break

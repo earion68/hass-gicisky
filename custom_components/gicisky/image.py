@@ -10,7 +10,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.config_entries import ConfigEntry
 from propcache.api import cached_property
 from .const import (
-    DOMAIN
+    DOMAIN,
+    DEVICE_TYPE_GICISKY,
+    DEVICE_TYPE_BADGE_EINK,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,10 +31,21 @@ class GiciskyImageEntity(CoordinatorEntity[DataUpdateCoordinator[bytes]], ImageE
         ImageEntity.__init__(self, hass)
         # self.hass = hass
         address = hass.data[DOMAIN][entry.entry_id]['address']
+        device_type = hass.data[DOMAIN][entry.entry_id].get('device_type', DEVICE_TYPE_GICISKY)
         self._address = address
+        self._device_type = device_type
         self._identifier = address.replace(":", "")[-8:]
-        self._attr_name = f"Gicisky {self._identifier} Last Updated Content"
-        self._attr_unique_id = f"gicisky_{self._identifier}_last_updated_content"
+        
+        # Use appropriate device names based on device type
+        if device_type == DEVICE_TYPE_BADGE_EINK:
+            device_name = "Badge e-ink"
+            self._manufacturer = "Badge e-ink"
+        else:
+            device_name = "Gicisky"
+            self._manufacturer = "Gicisky"
+        
+        self._attr_name = f"{device_name} {self._identifier} Last Updated Content"
+        self._attr_unique_id = f"{device_type}_{self._identifier}_last_updated_content"
         self._attr_content_type = "image/png"
         self._cached_image = Image(content_type="image/png", content=coordinator.data)
 
@@ -45,8 +58,8 @@ class GiciskyImageEntity(CoordinatorEntity[DataUpdateCoordinator[bytes]], ImageE
                     self._address,
                 )
             },
-            name = f"Gicisky {self._identifier}",
-            manufacturer = "Gicisky",
+            name = f"{self._manufacturer} {self._identifier}",
+            manufacturer = self._manufacturer,
         )
     
     @cached_property

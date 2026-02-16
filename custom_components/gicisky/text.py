@@ -8,7 +8,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.restore_state import RestoreEntity
 from propcache.api import cached_property
 from .const import (
-    DOMAIN
+    DOMAIN,
+    DEVICE_TYPE_GICISKY,
+    DEVICE_TYPE_BADGE_EINK,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,10 +25,19 @@ async def async_setup_entry(
 class GiciskyTextEntity(RestoreText):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         address = hass.data[DOMAIN][entry.entry_id]['address']
+        device_type = hass.data[DOMAIN][entry.entry_id].get('device_type', DEVICE_TYPE_GICISKY)
         self._address = address
+        self._device_type = device_type
         self._identifier = address.replace(":", "")[-8:]
-        self._attr_name = f"Gicisky {self._identifier} Alias"
-        self._attr_unique_id = f"gicisky_{self._identifier}_alias"
+        
+        # Use appropriate device names based on device type
+        if device_type == DEVICE_TYPE_BADGE_EINK:
+            self._manufacturer = "Badge e-ink"
+        else:
+            self._manufacturer = "Gicisky"
+        
+        self._attr_name = f"{self._manufacturer} {self._identifier} Alias"
+        self._attr_unique_id = f"{device_type}_{self._identifier}_alias"
         self._attr_native_max = 32  # Reasonable max length for text fields
         self._attr_native_min = 0
         self._attr_mode = "text"
@@ -41,8 +52,8 @@ class GiciskyTextEntity(RestoreText):
                     self._address,
                 )
             },
-            name = f"Gicisky {self._identifier}",
-            manufacturer = "Gicisky",
+            name = f"{self._manufacturer} {self._identifier}",
+            manufacturer = self._manufacturer,
         )
     
     @cached_property

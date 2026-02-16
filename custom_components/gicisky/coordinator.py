@@ -2,8 +2,10 @@
 
 from collections.abc import Callable
 from logging import Logger
+from typing import Union
 
 from .gicisky_ble import GiciskyBluetoothDeviceData, SensorUpdate
+from .badge_eink_ble import BadgeEinkBluetoothDeviceData
 
 from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
@@ -30,7 +32,7 @@ class GiciskyPassiveBluetoothProcessorCoordinator(
         address: str,
         mode: BluetoothScanningMode,
         update_method: Callable[[BluetoothServiceInfoBleak], SensorUpdate],
-        device_data: GiciskyBluetoothDeviceData,
+        device_data: Union[GiciskyBluetoothDeviceData, BadgeEinkBluetoothDeviceData],
         entry: GiciskyConfigEntry,
         connectable: bool = False,
     ) -> None:
@@ -46,3 +48,4 @@ class GiciskyPassiveBluetoothDataProcessor[_T](
     """Define a Gicisky Bluetooth Passive Update Data Processor."""
 
     coordinator: GiciskyPassiveBluetoothProcessorCoordinator
+

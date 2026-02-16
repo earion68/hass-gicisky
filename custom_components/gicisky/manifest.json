@@ -1,9 +1,13 @@
 {
   "domain": "gicisky",
-  "name": "Gicisky",
+  "name": "Gicisky & Badge e-ink",
   "bluetooth": [
     {
       "manufacturer_id": 20563,
+      "connectable": true
+    },
+    {
+      "service_uuid": "00001525-1212-efde-1523-785feabcd123",
       "connectable": true
     }
   ],
@@ -18,7 +22,7 @@
   "documentation": "https://github.com/eigger/hass-gicisky",
   "issue_tracker": "https://github.com/eigger/hass-gicisky/issues",
   "iot_class": "local_push",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "requirements": [
     "qrcode[pil]==7.4.2",
     "python-barcode==0.15.1"
