@@ -115,9 +115,13 @@ async def _ble_send(client: BleakClient, address: str, image_bytes: bytes) -> No
         address: Device MAC address
         image_bytes: Image payload to send
     """
+    import asyncio
+    
     xor_value = _etag.compute_xor_value(address)
     header = _etag.build_header(len(image_bytes), xor_value)
     packets = _etag.split_image_in_packets(image_bytes, xor_value)
+
+    _LOGGER.debug(f"Sending image to {address}: {len(image_bytes)} bytes, {len(packets)} packets")
 
     # Start notifications (some devices may not support this)
     try:
@@ -127,10 +131,15 @@ async def _ble_send(client: BleakClient, address: str, image_bytes: bytes) -> No
 
     # Send header
     await client.write_gatt_char(CHAR_WRITE, header, response=False)
+    _LOGGER.debug(f"Header sent ({len(header)} bytes)")
+    
+    # Wait for device to process header
+    await asyncio.sleep(0.05)
 
     # Send all packets
     for i, pkt in enumerate(packets, start=1):
         await client.write_gatt_char(CHAR_WRITE, pkt, response=False)
         # Small delay to avoid BLE write queue overflow
-        import asyncio
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.05)  # Increased from 0.02 to 0.05 seconds (50ms) for reliability
+    
+    _LOGGER.debug(f"All {len(packets)} packets sent successfully")
